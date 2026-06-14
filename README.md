@@ -1,6 +1,6 @@
 # The Garden at Night
 
-**Author:** Femke Veenvliet, 1701452
+**Author:** Femke Veenvliet
 **Course:** DBB100 Creative Programming
 **Date:** March 2026
 
