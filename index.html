@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>The Garden at Night</title>
+  <style>
+    /* reset: removes browser default margins and makes box sizing predictable */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* overflow: hidden prevents scrollbars appearing if the canvas slightly overflows */
+    html, body {
+      overflow: hidden;
+      background: #000; /* black fallback while p5 canvas loads */
+      width: 100%; height: 100%;
+    }
+
+    /* z-index: 0 !important keeps the canvas behind the HTML overlay elements.
+       The matching cnv.elt.style.zIndex = '0' in sketch.js setup() is also needed
+       because p5 sets inline z-index that overrides the stylesheet. */
+    canvas { display: block; position: fixed; top: 0; left: 0; z-index: 0 !important; }
+
+    /* all teal shades are derived from a single hue so the palette stays consistent.
+       opacity variants (40, 15) are used for borders and subtle overlays. */
+    :root {
+      --cyan:   rgba(44, 168, 182, 1);
+      --cyan40: rgba(44, 168, 182, 0.40);
+      --cyan15: rgba(44, 168, 182, 0.15);
+      --white:  rgba(220, 235, 240, 0.85);
+      --dim:    rgba(155, 195, 208, 0.65);
+      --bg:     rgba(4, 18, 26, 0.88);
+    }
+
+    /* intro screen covers the whole viewport and fades out at 11 s, giving the animation
+       time to start before the visitor sees it. pointer-events: none lets the canvas
+       underneath receive mouse events even while the intro is partially visible. 
+       
+       Source for CSS keyframe animations and animation-delay for the intro sequence: https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_animations/Using_CSS_animations
+    */
+    #intro {
+      position: fixed; inset: 0; z-index: 30;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 28px;
+      background: rgb(0, 4, 8);
+      animation: fadeOut 1.2s ease-in 11s forwards;
+      pointer-events: none;
+    }
+
+    /* clamp() keeps the title readable on both small screens and large monitors */
+    #intro h1 {
+      font-family: 'Georgia', serif;
+      font-size: clamp(2rem, 5vw, 3.8rem);
+      font-weight: 400;
+      letter-spacing: 0.18em;
+      color: var(--white);
+      text-transform: uppercase;
+      animation: riseIn 1.4s ease-out 0.4s both;
+    }
+
+    /* thin horizontal rule between the title and body text: purely decorative */
+    #intro .rule {
+      width: 60px; height: 1px;
+      background: var(--cyan40);
+      animation: riseIn 1.2s ease-out 0.9s both;
+    }
+
+    /* body text is muted (--dim) rather than full white so it doesn't compete with the title */
+    #intro p {
+      font-family: 'Georgia', serif;
+      font-size: clamp(0.8rem, 1.6vw, 1.1rem);
+      line-height: 1.85;
+      letter-spacing: 0.06em;
+      color: var(--dim);
+      max-width: 540px;
+      text-align: center;
+      animation: riseIn 1.2s ease-out 1.3s both;
+    }
+
+    /* title bar fades in at 7.2 s before the intro fully fades so there's overlap. 
+    it has no background so it sits transparently over the canvas. */
+    #title-bar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 28px;
+      opacity: 0;
+      animation: fadeIn 0.8s ease-out 7.2s forwards;
+    }
+
+    #title-bar .name {
+      font-family: 'Georgia', serif;
+      font-size: 0.78rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--cyan40); /* semi-transparent so it reads as a watermark, not a headline */
+    }
+
+    /* author name sits in the opposite corner: same low-key treatment */
+    #title-bar .key-hint {
+      font-family: monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.10em;
+      color: rgba(57, 198, 214, 0.22);
+    }
+
+    /* hardware guide panel appears at 9.5 s: after the title bar but while the intro is
+       still partially visible, so the visitor understands what to do before it clears.
+       it stays in place until the visitor clicks the arrow button after connecting. */
+    #bottom-panel {
+      position: fixed; top: 58%; left: 28px; right: 28px;
+      transform: translateY(-50%);
+      z-index: 20;
+      display: flex; flex-direction: column;
+      align-items: center; gap: 50px;
+      background: rgb(3, 14, 20);
+      border: 1px solid var(--cyan15);
+      border-radius: 8px;
+      padding: 32px 0;
+      opacity: 0;
+      animation: fadeIn 0.15s ease-out 9.5s forwards;
+    }
+
+    /* minimised state: triggered by enterGarden() after the Arduino is connected.
+       slides to a small strip in the bottom-left so the sensor readings remain visible
+       during the installation without blocking the garden. backdrop-filter adds a
+       frosted-glass effect against the canvas behind it. 
+       
+       Source for backdrop-filter: blur() for the frosted-glass minimised panel: https://developer.mozilla.org/en-US/docs/Web/CSS/backdrop-filter and https://css-tricks.com/using-css-backdrop-filter-for-ui-effects/
+    */
+    #bottom-panel.minimised {
+      top: auto; bottom: 20px; left: 20px; right: auto;
+      transform: none;
+      width: 580px;
+      gap: 8px;
+      padding: 8px 0;
+      background: rgba(4, 22, 30, 0.25);
+      backdrop-filter: blur(6px);
+      border-color: rgba(44, 168, 182, 0.10);
+      transition: all 0.8s ease;
+    }
+
+    /* scale down all sensor text and icons in the minimised state */
+    #bottom-panel.minimised .sensor { padding: 0 14px; gap: 6px; }
+    #bottom-panel.minimised .sensor .icon { font-size: 0.95rem; }
+    #bottom-panel.minimised .sensor .label { font-size: 0.50rem; }
+    #bottom-panel.minimised .sensor .desc { font-size: 0.60rem; line-height: 1.3; }
+    /* hide the connect button row once the panel is minimised: it's no longer needed */
+    #bottom-panel.minimised #connect-wrap { display: none; }
+
+    /* #guide stretches full width so each .sensor flex-item gets an equal share */
+    #guide {
+      width: 100%;
+      display: flex;
+    }
+
+    /* each sensor column is separated by a faint teal border; the last one has none */
+    .sensor {
+      flex: 1;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      padding: 0 20px;
+      border-right: 1px solid var(--cyan15);
+    }
+    .sensor:last-child { border-right: none; }
+
+    .sensor .icon {
+      font-size: 1.6rem;
+      line-height: 1;
+      /* invert(1) first: without it, sepia on a dark emoji produces near-black.
+         the chain then pushes the result into the teal garden palette. */
+      filter: invert(1) sepia(1) saturate(4) hue-rotate(148deg) brightness(0.88);
+    }
+
+    /* monospace label in full --cyan reads as a technical identifier */
+    .sensor .label {
+      font-family: monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.20em;
+      text-transform: uppercase;
+      color: var(--cyan);
+    }
+
+    /* description in Georgia keeps the tone warm and literary, matching the intro copy */
+    .sensor .desc {
+      font-family: 'Georgia', serif;
+      font-size: 0.82rem;
+      letter-spacing: 0.04em;
+      color: rgba(210, 240, 248, 0.85);
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    /* connect button and arrow sit side by side; the arrow only appears after connection */
+    #connect-wrap {
+      display: flex; align-items: center; justify-content: center;
+      gap: 20px; width: 100%;
+    }
+
+    #connect-btn {
+      font-family: 'Georgia', serif;
+      font-size: 1rem;
+      letter-spacing: 0.10em;
+      color: rgba(44, 168, 182, 0.85);
+      background: var(--bg);
+      border: 1px solid var(--cyan40);
+      border-radius: 5px;
+      padding: 14px 36px;
+      cursor: pointer;
+      transition: color 0.4s, border-color 0.4s, background 0.4s;
+    }
+
+    #connect-btn:hover {
+      color: #fff;
+      border-color: var(--cyan);
+      background: rgba(44, 168, 182, 0.10);
+    }
+
+    /* .connected state is added by connectSerial(): removes pointer and brightens text */
+    #connect-btn.connected {
+      color: var(--cyan);
+      border-color: var(--cyan40);
+      cursor: default;
+    }
+
+    /* display: none means the button is truly absent from layout until JS sets it to flex.
+       the riseIn animation then plays immediately when it becomes visible. */
+    #enter-btn {
+      display: none;
+      align-items: center; justify-content: center;
+      width: 48px; height: 48px;
+      border-radius: 50%;
+      border: 1px solid var(--cyan40);
+      background: transparent;
+      color: var(--cyan);
+      font-size: 1.1rem;
+      cursor: pointer;
+      transition: background 0.3s, border-color 0.3s, color 0.3s;
+      animation: riseIn 0.6s ease-out both;
+    }
+
+    #enter-btn:hover {
+      background: rgba(44, 168, 182, 0.15);
+      border-color: var(--cyan);
+      color: #fff;
+    }
+
+    /* fadeOut sets pointer-events: none at the end so the invisible intro doesn't block clicks */
+    @keyframes fadeOut {
+      to { opacity: 0; pointer-events: none; }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    /* riseIn combines a gentle upward drift with the fade: feels more alive than a plain fade */
+    @keyframes riseIn {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+</head>
+<body>
+
+  <!-- full-screen intro: covers the canvas while the scene initialises -->
+  <div id="intro">
+    <h1>The Garden at Night</h1>
+    <div class="rule"></div>
+    <p>
+      In the dark beneath old growth, organisms glow not for beauty, but for survival.
+      Light draws moths. Rain drives them to shelter. Wind bends the canopy.
+      This is the language of the living dark.
+    </p>
+  </div>
+
+  <!-- persistent watermark: visible once the intro clears -->
+  <div id="title-bar">
+    <span class="name">The Garden at Night</span>
+    <span class="key-hint">Femke Veenvliet</span>
+  </div>
+
+  <!-- hardware guide: three sensor columns plus the connect/enter buttons.
+       connectSerial() is defined in sketch.js and uses the Web Serial API.
+       enterGarden() is defined inline below and just adds the .minimised class. -->
+  <div id="bottom-panel">
+    <div id="guide">
+      <div class="sensor">
+        <span class="icon">🌬</span>
+        <span class="label">Dial</span>
+        <span class="desc">Turn to shift the wind</span>
+      </div>
+      <div class="sensor">
+        <span class="icon">☀</span>
+        <span class="label">Light</span>
+        <span class="desc">Cover or illuminate to move between night and day</span>
+      </div>
+      <div class="sensor">
+        <span class="icon">🌧</span>
+        <span class="label">Button</span>
+        <span class="desc">Press to call the rain</span>
+      </div>
+    </div>
+    <div id="connect-wrap">
+      <button id="connect-btn" onclick="connectSerial()">Connect to Arduino</button>
+      <!-- arrow button is hidden by default; connectSerial() sets it to display:flex on success -->
+      <button id="enter-btn" onclick="enterGarden()">&#8594;</button>
+    </div>
+  </div>
+
+  <!-- script load order matters: helpers first (gustyWind, pc, etc.), sketch last (setup/draw).
+       sketch.js references functions from all the other files so it must come after them. -->
+  <script src="helpers.js"></script>
+  <script src="flowers.js"></script>
+  <script src="background.js"></script>
+  <script src="environment.js"></script>
+  <script src="creatures.js"></script>
+  <script src="sketch.js"></script>
+  <script>
+    // collapses the hardware guide to its minimised corner strip
+    // called once: the panel never goes back to full size during a session
+    function enterGarden() {
+      const panel = document.getElementById('bottom-panel');
+      panel.classList.add('minimised');
+    }
+  </script>
+</body>
+</html>
